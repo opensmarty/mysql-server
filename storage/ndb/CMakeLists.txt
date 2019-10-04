@@ -1,4 +1,4 @@
-# Copyright (c) 2008, 2018, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2008, 2019, Oracle and/or its affiliates. All rights reserved.
 #
 # This program is free software; you can redistribute it and/or modify
 # it under the terms of the GNU General Public License, version 2.0,
@@ -70,6 +70,7 @@ SET(NDBCLUSTER_SOURCES
   ../../sql/ndb_dd.cc
   ../../sql/ndb_modifiers.cc
   ../../sql/ndb_dd_client.cc
+  ../../sql/ndb_dd_schema.cc
   ../../sql/ndb_dd_table.cc
   ../../sql/ndb_dd_sdi.cc
   ../../sql/ndb_plugin_reference.cc
@@ -86,10 +87,20 @@ SET(NDBCLUSTER_SOURCES
   ../../sql/ndb_create_helper.cc
   ../../sql/ndb_apply_status_table.cc
   ../../sql/ndb_metadata_change_monitor.cc
+  ../../sql/ndb_schema_result_table.cc
 )
 
 # Include directories used when building ha_ndbcluster
 INCLUDE_DIRECTORIES(${CMAKE_SOURCE_DIR}/storage/ndb/include)
+
+IF(SOLARIS_INTEL)
+  # Sun Studio 12.6 on x86 machines creates a bogus code
+  # when -xO2 is used and crashes the executable whenever
+  # it calls std::condition_variable::wait_for()
+  STRING_APPEND(CMAKE_CXX_FLAGS_RELWITHDEBINFO " -xO1")
+  STRING_APPEND(CMAKE_CXX_FLAGS_RELEASE " -xO1")
+  STRING_APPEND(CMAKE_CXX_FLAGS_MINSIZEREL " -xO1")
+ENDIF()
 
 IF(NOT WITHOUT_SERVER)
   MYSQL_ADD_PLUGIN(ndbcluster ${NDBCLUSTER_SOURCES} STORAGE_ENGINE
