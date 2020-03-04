@@ -1045,11 +1045,11 @@ void store_predefined_tablespace_metadata(THD *thd) {
 }
 
 bool create_dd_schema(THD *thd) {
-  return dd::execute_query(
-             thd, dd::String_type("CREATE SCHEMA ") +
-                      dd::String_type(MYSQL_SCHEMA_NAME.str) +
-                      dd::String_type(" DEFAULT COLLATE '") +
-                      dd::String_type(default_charset_info->name) + "'") ||
+  return dd::execute_query(thd,
+                           dd::String_type("CREATE SCHEMA ") +
+                               dd::String_type(MYSQL_SCHEMA_NAME.str) +
+                               dd::String_type(" DEFAULT COLLATE ") +
+                               dd::String_type(default_charset_info->name)) ||
          dd::execute_query(thd, dd::String_type("USE ") +
                                     dd::String_type(MYSQL_SCHEMA_NAME.str));
 }
@@ -1535,7 +1535,7 @@ bool sync_meta_data(THD *thd) {
                                                        "UPGRADE_TARGET_SCHEMA");
 
   if (actual_schema_exists || target_schema_exists)
-    return end_transaction(thd, false);
+    return dd::end_transaction(thd, false);
 
   return false;
 }

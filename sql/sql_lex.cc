@@ -84,7 +84,6 @@ sys_var *trg_new_row_fake_var = (sys_var *)0x01;
   LEX_STRING constant for null-string to be used in parser and other places.
 */
 const LEX_STRING null_lex_str = {NULL, 0};
-const LEX_STRING empty_lex_str = {(char *)"", 0};
 /**
   Mapping from enum values in enum_binlog_stmt_unsafe to error codes.
 
@@ -148,21 +147,20 @@ Table_ident::Table_ident(Protocol *protocol, const LEX_CSTRING &db_arg,
 }
 
 bool lex_init(void) {
-  DBUG_ENTER("lex_init");
+  DBUG_TRACE;
 
   for (CHARSET_INFO **cs = all_charsets;
        cs < all_charsets + array_elements(all_charsets) - 1; cs++) {
     if (*cs && (*cs)->ctype && is_supported_parser_charset(*cs)) {
-      if (init_state_maps(*cs)) DBUG_RETURN(true);  // OOM
+      if (init_state_maps(*cs)) return true;  // OOM
     }
   }
 
-  DBUG_RETURN(false);
+  return false;
 }
 
 void lex_free(void) {  // Call this when daemon ends
-  DBUG_ENTER("lex_free");
-  DBUG_VOID_RETURN;
+  DBUG_TRACE;
 }
 
 void st_parsing_options::reset() {
@@ -459,6 +457,7 @@ void LEX::reset() {
   create_info = NULL;
   server_options.reset();
   explain_format = NULL;
+  is_explain_analyze = false;
   is_lex_started = true;
   reset_slave_info.all = false;
   mi.channel = NULL;
@@ -472,6 +471,7 @@ void LEX::reset() {
   binlog_need_explicit_defaults_ts = false;
   m_extended_show = false;
   option_type = OPT_DEFAULT;
+  force_iterator_executor = false;
 
   clear_privileges();
   grant_as.cleanup();
@@ -487,7 +487,7 @@ void LEX::reset() {
 */
 
 bool lex_start(THD *thd) {
-  DBUG_ENTER("lex_start");
+  DBUG_TRACE;
 
   LEX *lex = thd->lex;
 
@@ -503,7 +503,7 @@ bool lex_start(THD *thd) {
   lex->m_IS_table_stats.invalidate_cache();
   lex->m_IS_tablespace_stats.invalidate_cache();
 
-  DBUG_RETURN(status);
+  return status;
 }
 
 /**
@@ -511,7 +511,7 @@ bool lex_start(THD *thd) {
 */
 
 void lex_end(LEX *lex) {
-  DBUG_ENTER("lex_end");
+  DBUG_TRACE;
   DBUG_PRINT("enter", ("lex: %p", lex));
 
   /* release used plugins */
@@ -523,8 +523,6 @@ void lex_end(LEX *lex) {
 
   sp_head::destroy(lex->sphead);
   lex->sphead = NULL;
-
-  DBUG_VOID_RETURN;
 }
 
 SELECT_LEX *LEX::new_empty_query_block() {
@@ -548,26 +546,26 @@ SELECT_LEX *LEX::new_empty_query_block() {
   @return new query specification if successful, NULL if error
 */
 SELECT_LEX *LEX::new_query(SELECT_LEX *curr_select) {
-  DBUG_ENTER("LEX::new_query");
+  DBUG_TRACE;
 
   if (curr_select != NULL &&
       curr_select->nest_level >= (int)MAX_SELECT_NESTING) {
     my_error(ER_TOO_HIGH_LEVEL_OF_NESTING_FOR_SELECT, MYF(0),
              MAX_SELECT_NESTING);
-    DBUG_RETURN(NULL);
+    return NULL;
   }
 
   Name_resolution_context *outer_context = current_context();
 
   SELECT_LEX *const select = new_empty_query_block();
-  if (!select) DBUG_RETURN(NULL); /* purecov: inspected */
+  if (!select) return NULL; /* purecov: inspected */
 
   enum_parsing_context parsing_place =
       curr_select ? curr_select->parsing_place : CTX_NONE;
 
   SELECT_LEX_UNIT *const sel_unit =
       new (thd->mem_root) SELECT_LEX_UNIT(parsing_place);
-  if (!sel_unit) DBUG_RETURN(NULL); /* purecov: inspected */
+  if (!sel_unit) return NULL; /* purecov: inspected */
 
   // Link the new "unit" below the current select_lex, if any
   if (curr_select != NULL) sel_unit->include_down(this, curr_select);
@@ -576,7 +574,7 @@ SELECT_LEX *LEX::new_query(SELECT_LEX *curr_select) {
 
   select->include_in_global(&all_selects_list);
 
-  if (select->set_context(NULL)) DBUG_RETURN(NULL); /* purecov: inspected */
+  if (select->set_context(NULL)) return NULL; /* purecov: inspected */
   /*
     Assume that a subquery has an outer name resolution context
     (even a non-lateral derived table may have outer references).
@@ -590,12 +588,10 @@ SELECT_LEX *LEX::new_query(SELECT_LEX *curr_select) {
   */
   if (parsing_place == CTX_NONE)  // Outer-most query block
   {
-  } else if (parsing_place == CTX_INSERT_VALUES ||
-             parsing_place == CTX_INSERT_UPDATE) {
+  } else if (parsing_place == CTX_INSERT_VALUES) {
     /*
       Outer references are not allowed for
       - subqueries in INSERT ... VALUES clauses
-      - subqueries in INSERT ON DUPLICATE KEY UPDATE clauses
     */
     DBUG_ASSERT(select->context.outer_context == NULL);
   } else {
@@ -609,7 +605,7 @@ SELECT_LEX *LEX::new_query(SELECT_LEX *curr_select) {
   DBUG_PRINT("outer_field",
              ("ctx %p <-> SL# %d", &select->context, select->select_number));
 
-  DBUG_RETURN(select);
+  return select;
 }
 
 /**
@@ -620,19 +616,11 @@ SELECT_LEX *LEX::new_query(SELECT_LEX *curr_select) {
   @param curr_select current query specification
   @param distinct True if part of UNION DISTINCT query
 
-  @param check_syntax This function is called from both new and legacy
-  code. New code uses the actual parse tree for checking syntax before
-  creating SELECT_LEX'es (good), while legacy code checks the SELECT_LEX
-  structures later on to see what syntax they seem to be generated from
-  (bad). When all parser rules have been converted, this parameter will always
-  be false, and can be removed.
-
   @return new query specification if successful, NULL if an error occurred.
 */
 
-SELECT_LEX *LEX::new_union_query(SELECT_LEX *curr_select, bool distinct,
-                                 bool check_syntax) {
-  DBUG_ENTER("LEX::new_union_query");
+SELECT_LEX *LEX::new_union_query(SELECT_LEX *curr_select, bool distinct) {
+  DBUG_TRACE;
 
   DBUG_ASSERT(unit != NULL && select_lex != NULL);
 
@@ -644,34 +632,22 @@ SELECT_LEX *LEX::new_union_query(SELECT_LEX *curr_select, bool distinct,
      the outer-most level:
   */
   if (outer_most && result) {
-    my_error(ER_WRONG_USAGE, MYF(0), "UNION", "INTO");
-    DBUG_RETURN(NULL);
-  }
-
-  if (check_syntax) {
-    if (curr_select->order_list.first && !curr_select->braces) {
-      my_error(ER_WRONG_USAGE, MYF(0), "UNION", "ORDER BY");
-      DBUG_RETURN(NULL);
-    }
-
-    if (curr_select->explicit_limit && !curr_select->braces) {
-      my_error(ER_WRONG_USAGE, MYF(0), "UNION", "LIMIT");
-      DBUG_RETURN(NULL);
-    }
+    my_error(ER_MISPLACED_INTO, MYF(0));
+    return nullptr;
   }
 
   SELECT_LEX *const select = new_empty_query_block();
-  if (!select) DBUG_RETURN(NULL); /* purecov: inspected */
+  if (!select) return NULL; /* purecov: inspected */
 
   select->include_neighbour(this, curr_select);
 
   SELECT_LEX_UNIT *const sel_unit = select->master_unit();
 
   if (!sel_unit->fake_select_lex && sel_unit->add_fake_select_lex(thd))
-    DBUG_RETURN(NULL); /* purecov: inspected */
+    return NULL; /* purecov: inspected */
 
   if (select->set_context(sel_unit->first_select()->context.outer_context))
-    DBUG_RETURN(NULL); /* purecov: inspected */
+    return NULL; /* purecov: inspected */
 
   select->include_in_global(&all_selects_list);
 
@@ -686,7 +662,7 @@ SELECT_LEX *LEX::new_union_query(SELECT_LEX *curr_select, bool distinct,
   */
   select->context.resolve_in_select_list = true;
 
-  DBUG_RETURN(select);
+  return select;
 }
 
 /**
@@ -697,7 +673,7 @@ SELECT_LEX *LEX::new_union_query(SELECT_LEX *curr_select, bool distinct,
 */
 
 bool LEX::new_top_level_query() {
-  DBUG_ENTER("LEX::new_top_level_query");
+  DBUG_TRACE;
 
   // Assure that the LEX does not contain any query expression already
   DBUG_ASSERT(unit == NULL && select_lex == NULL);
@@ -706,11 +682,11 @@ bool LEX::new_top_level_query() {
   DBUG_ASSERT(result == 0);
 
   select_lex = new_query(NULL);
-  if (select_lex == NULL) DBUG_RETURN(true); /* purecov: inspected */
+  if (select_lex == NULL) return true; /* purecov: inspected */
 
   unit = select_lex->master_unit();
 
-  DBUG_RETURN(false);
+  return false;
 }
 
 /**
@@ -731,7 +707,7 @@ bool LEX::new_top_level_query() {
 void LEX::new_static_query(SELECT_LEX_UNIT *sel_unit, SELECT_LEX *select)
 
 {
-  DBUG_ENTER("LEX::new_static_query");
+  DBUG_TRACE;
 
   reset();
 
@@ -751,8 +727,6 @@ void LEX::new_static_query(SELECT_LEX_UNIT *sel_unit, SELECT_LEX *select)
   set_current_select(select);
 
   select->context.resolve_in_select_list = true;
-
-  DBUG_VOID_RETURN;
 }
 
 Yacc_state::~Yacc_state() {
@@ -815,7 +789,7 @@ static int find_keyword(Lex_input_stream *lip, uint len, bool function) {
 
   if (symbol) {
     lip->yylval->keyword.symbol = symbol;
-    lip->yylval->keyword.str = (char *)tok;
+    lip->yylval->keyword.str = const_cast<char *>(tok);
     lip->yylval->keyword.length = len;
 
     if ((symbol->tok == NOT_SYM) &&
@@ -968,7 +942,7 @@ static char *get_text(Lex_input_stream *lip, int pre_skip, int post_skip) {
 
       if (!(start =
                 static_cast<char *>(lip->m_thd->alloc((uint)(end - str) + 1))))
-        return (char *)"";  // MEM_ROOT has set error flag
+        return const_cast<char *>("");  // MEM_ROOT has set error flag
 
       lip->m_cpp_text_start = lip->get_cpp_tok_start() + pre_skip;
       lip->m_cpp_text_end = lip->get_cpp_ptr() - post_skip;
@@ -1080,7 +1054,7 @@ static const uint unsigned_longlong_len = 20;
 static inline uint int_token(const char *str, uint length) {
   if (length < long_len)  // quick normal case
     return NUM;
-  bool neg = 0;
+  bool neg = false;
 
   if (*str == '+')  // Remove sign and pre-zeros
   {
@@ -1089,7 +1063,7 @@ static inline uint int_token(const char *str, uint length) {
   } else if (*str == '-') {
     str++;
     length--;
-    neg = 1;
+    neg = true;
   }
   while (*str == '0' && length) {
     str++;
@@ -1425,20 +1399,21 @@ static int lex_one_token(Lexer_yystype *yylval, THD *thd) {
 
         if (yylval->lex_str.str[0] == '_') {
           auto charset_name = yylval->lex_str.str + 1;
-          const CHARSET_INFO *cs =
+          const CHARSET_INFO *underscore_cs =
               get_charset_by_csname(charset_name, MY_CS_PRIMARY, MYF(0));
-          if (cs) {
-            lip->warn_on_deprecated_charset(cs, charset_name);
-            if (cs == &my_charset_utf8mb4_0900_ai_ci) {
+          if (underscore_cs) {
+            lip->warn_on_deprecated_charset(underscore_cs, charset_name);
+            if (underscore_cs == &my_charset_utf8mb4_0900_ai_ci) {
               /*
-                If cs is utf8mb4, and the collation of cs is the default
-                collation of utf8mb4, then update cs with a value of the
-                default_collation_for_utf8mb4 system variable:
+                If underscore_cs is utf8mb4, and the collation of underscore_cs
+                is the default collation of utf8mb4, then update underscore_cs
+                with a value of the default_collation_for_utf8mb4 system
+                variable:
               */
-              cs = thd->variables.default_collation_for_utf8mb4;
+              underscore_cs = thd->variables.default_collation_for_utf8mb4;
             }
-            yylval->charset = cs;
-            lip->m_underscore_cs = cs;
+            yylval->charset = underscore_cs;
+            lip->m_underscore_cs = underscore_cs;
 
             lip->body_utf8_append(lip->m_cpp_text_start,
                                   lip->get_cpp_tok_start() + length);
@@ -1454,7 +1429,7 @@ static int lex_one_token(Lexer_yystype *yylval, THD *thd) {
         return (result_state);  // IDENT or IDENT_QUOTED
 
       case MY_LEX_IDENT_SEP:  // Found ident and now '.'
-        yylval->lex_str.str = (char *)lip->get_ptr();
+        yylval->lex_str.str = const_cast<char *>(lip->get_ptr());
         yylval->lex_str.length = 1;
         c = lip->yyGet();  // should be '.'
         lip->next_state =
@@ -1646,7 +1621,7 @@ static int lex_one_token(Lexer_yystype *yylval, THD *thd) {
         if (state_map[lip->yyPeek()] == MY_LEX_CMP_OP ||
             state_map[lip->yyPeek()] == MY_LEX_LONG_CMP_OP)
           lip->yySkip();
-        if ((tokval = find_keyword(lip, lip->yyLength() + 1, 0))) {
+        if ((tokval = find_keyword(lip, lip->yyLength() + 1, false))) {
           lip->next_state = MY_LEX_START;  // Allow signed numbers
           return (tokval);
         }
@@ -1659,7 +1634,7 @@ static int lex_one_token(Lexer_yystype *yylval, THD *thd) {
           lip->yySkip();
           if (state_map[lip->yyPeek()] == MY_LEX_CMP_OP) lip->yySkip();
         }
-        if ((tokval = find_keyword(lip, lip->yyLength() + 1, 0))) {
+        if ((tokval = find_keyword(lip, lip->yyLength() + 1, false))) {
           lip->next_state = MY_LEX_START;  // Found long op
           return (tokval);
         }
@@ -1672,8 +1647,8 @@ static int lex_one_token(Lexer_yystype *yylval, THD *thd) {
           break;
         }
         lip->yySkip();
-        tokval = find_keyword(lip, 2, 0);  // Is a bool operator
-        lip->next_state = MY_LEX_START;    // Allow signed numbers
+        tokval = find_keyword(lip, 2, false);  // Is a bool operator
+        lip->next_state = MY_LEX_START;        // Allow signed numbers
         return (tokval);
 
       case MY_LEX_STRING_OR_DELIMITER:
@@ -1882,7 +1857,7 @@ static int lex_one_token(Lexer_yystype *yylval, THD *thd) {
             lip->next_state = MY_LEX_HOSTNAME;
             break;
         }
-        yylval->lex_str.str = (char *)lip->get_ptr();
+        yylval->lex_str.str = const_cast<char *>(lip->get_ptr());
         yylval->lex_str.length = 1;
         return ((int)'@');
       case MY_LEX_HOSTNAME:  // end '@' of user@hostname
@@ -1893,7 +1868,7 @@ static int lex_one_token(Lexer_yystype *yylval, THD *thd) {
         yylval->lex_str = get_token(lip, 0, lip->yyLength());
         return (LEX_HOSTNAME);
       case MY_LEX_SYSTEM_VAR:
-        yylval->lex_str.str = (char *)lip->get_ptr();
+        yylval->lex_str.str = const_cast<char *>(lip->get_ptr());
         yylval->lex_str.length = 1;
         lip->yySkip();  // Skip '@'
         lip->next_state =
@@ -1916,7 +1891,7 @@ static int lex_one_token(Lexer_yystype *yylval, THD *thd) {
         if (c == '.') lip->next_state = MY_LEX_IDENT_SEP;
         length = lip->yyLength();
         if (length == 0) return (ABORT_SYM);  // Names must be nonempty.
-        if ((tokval = find_keyword(lip, length, 0))) {
+        if ((tokval = find_keyword(lip, length, false))) {
           lip->yyUnget();   // Put back 'c'
           return (tokval);  // Was keyword
         }
@@ -2104,7 +2079,6 @@ SELECT_LEX::SELECT_LEX(Item *where, Item *having)
       nest_level(0),
       inner_sum_func_list(NULL),
       with_wild(0),
-      braces(false),
       having_fix_field(false),
       group_fix_field(false),
       explicit_limit(false),
@@ -2190,8 +2164,11 @@ void SELECT_LEX_UNIT::exclude_level() {
   SELECT_LEX_UNIT **units_last = &units;
   SELECT_LEX *sl = first_select();
   while (sl) {
-    // Exclusion can only be done prior to optimization.
-    DBUG_ASSERT(sl->join == nullptr);
+    // Exclusion can only be done prior to optimization or if the subquery is
+    // already executed because it might not be using any tables (const item).
+    DBUG_ASSERT(sl->join == nullptr || is_executed());
+    if (sl->join != nullptr) sl->join->destroy();
+
     SELECT_LEX *next_select = sl->next_select();
 
     // unlink current level from global SELECTs list
@@ -2368,9 +2345,9 @@ void SELECT_LEX::mark_as_dependent(SELECT_LEX *last, bool aggregate) {
 bool SELECT_LEX::test_limit() {
   if (select_limit != 0) {
     my_error(ER_NOT_SUPPORTED_YET, MYF(0), "LIMIT & IN/ALL/ANY/SOME subquery");
-    return (1);
+    return (true);
   }
-  return (0);
+  return (false);
 }
 
 enum_parsing_context SELECT_LEX_UNIT::get_explain_marker(const THD *thd) const {
@@ -2451,9 +2428,9 @@ void SELECT_LEX::add_order_to_list(ORDER *order) {
 }
 
 bool SELECT_LEX::add_item_to_list(Item *item) {
-  DBUG_ENTER("SELECT_LEX::add_item_to_list");
+  DBUG_TRACE;
   DBUG_PRINT("info", ("Item: %p", item));
-  DBUG_RETURN(item_list.push_back(item));
+  return item_list.push_back(item);
 }
 
 bool SELECT_LEX::add_ftfunc_to_list(Item_func_match *func) {
@@ -2471,11 +2448,6 @@ void SELECT_LEX::invalidate() {
   slave = NULL;
   link_next = NULL;
   link_prev = NULL;
-}
-
-bool SELECT_LEX::set_braces(bool value) {
-  braces = value;
-  return 0;
 }
 
 bool SELECT_LEX::setup_base_ref_items(THD *thd) {
@@ -2549,9 +2521,13 @@ void SELECT_LEX_UNIT::print(const THD *thd, String *str,
       else if (union_distinct == sl)
         union_all = true;
     }
-    if (sl->braces) str->append('(');
+    bool parentheses_are_needed =
+        sl->has_explicit_limit_or_order() &&
+        (is_union() || (fake_select_lex != nullptr &&
+                        fake_select_lex->has_explicit_limit_or_order()));
+    if (parentheses_are_needed) str->append('(');
     sl->print(thd, str, query_type);
-    if (sl->braces) str->append(')');
+    if (parentheses_are_needed) str->append(')');
   }
   if (fake_select_lex) {
     if (fake_select_lex->order_list.elements) {
@@ -2868,23 +2844,27 @@ void SELECT_LEX::print(const THD *thd, String *str,
       case SQLCOM_UPDATE:  // Fall through
       case SQLCOM_UPDATE_MULTI:
         print_update(thd, str, query_type);
-        break;
+        return;
       case SQLCOM_DELETE:  // Fall through
       case SQLCOM_DELETE_MULTI:
         print_delete(thd, str, query_type);
-        break;
+        return;
       case SQLCOM_INSERT:  // Fall through
       case SQLCOM_INSERT_SELECT:
       case SQLCOM_REPLACE:
       case SQLCOM_REPLACE_SELECT:
         print_insert(thd, str, query_type);
-        break;
+        return;
       case SQLCOM_SELECT:  // Fall through
       default:
-        print_select(thd, str, query_type);
+        break;
     }
-  } else
+  }
+  if (is_table_value_constructor) {
+    print_values(thd, str, query_type, *row_value_list, "row");
+  } else {
     print_select(thd, str, query_type);
+  }
 }
 
 void SELECT_LEX::print_select(const THD *thd, String *str,
@@ -2988,6 +2968,9 @@ void SELECT_LEX::print_insert(const THD *thd, String *str,
     USES: 'INSERT INTO table (fields) VALUES values' syntax over
     'INSERT INTO table SET field = value, ...'
   */
+  Sql_cmd_insert_base *sql_cmd_insert =
+      down_cast<Sql_cmd_insert_base *>(parent_lex->m_sql_cmd);
+
   if (parent_lex->sql_command == SQLCOM_REPLACE ||
       parent_lex->sql_command == SQLCOM_REPLACE_SELECT)
     str->append(STRING_WITH_LEN("replace "));
@@ -3009,7 +2992,8 @@ void SELECT_LEX::print_insert(const THD *thd, String *str,
 
   if (parent_lex->sql_command == SQLCOM_INSERT ||
       parent_lex->sql_command == SQLCOM_REPLACE) {
-    print_insert_values(thd, str, query_type);
+    print_values(thd, str, query_type, sql_cmd_insert->insert_many_values,
+                 nullptr);
   } else {
     /*
       Print only QB name hint here since other hints were printed in the
@@ -3018,8 +3002,6 @@ void SELECT_LEX::print_insert(const THD *thd, String *str,
     print_select(thd, str, enum_query_type(query_type | QT_ONLY_QB_NAME));
   }
 
-  Sql_cmd_insert_base *sql_cmd_insert =
-      static_cast<Sql_cmd_insert_base *>(parent_lex->m_sql_cmd);
   if (sql_cmd_insert->update_field_list.elements > 0) {
     str->append(STRING_WITH_LEN(" on duplicate key update "));
     print_update_list(thd, str, query_type, sql_cmd_insert->update_field_list,
@@ -3215,21 +3197,21 @@ void SELECT_LEX::print_insert_fields(const THD *thd, String *str,
   }
 }
 
-void SELECT_LEX::print_insert_values(const THD *thd, String *str,
-                                     enum_query_type query_type) {
+void SELECT_LEX::print_values(const THD *thd, String *str,
+                              enum_query_type query_type,
+                              List<List<Item>> values, const char *prefix) {
   str->append(STRING_WITH_LEN("values "));
-  List_iterator<List_item> it_row(
-      static_cast<Sql_cmd_insert_base *>(parent_lex->m_sql_cmd)
-          ->insert_many_values);
   bool row_first = true;
-  while (List_item *row = it_row++) {
+  for (List<Item> &row : values) {
     if (row_first)
       row_first = false;
     else
       str->append(',');
 
+    if (prefix != nullptr) str->append(prefix);
+
     str->append('(');
-    List_iterator<Item> it_col(*row);
+    List_iterator<Item> it_col(row);
     bool col_first = true;
     while (Item *item = it_col++) {
       if (col_first)
@@ -3425,7 +3407,7 @@ bool SELECT_LEX::accept(Select_lex_visitor *visitor) {
 void LEX::clear_privileges() {
   users_list.empty();
   columns.empty();
-  grant = grant_tot_col = grant_privilege = 0;
+  grant = grant_tot_col = grant_privilege = false;
   all_privileges = false;
   ssl_type = SSL_TYPE_NOT_SPECIFIED;
   ssl_cipher = x509_subject = x509_issuer = nullptr;
@@ -3525,7 +3507,7 @@ LEX::LEX()
       // Initialize here to avoid uninitialized variable warnings.
       contains_plaintext_password(false),
       keep_diagnostics(DA_KEEP_UNSPECIFIED),
-      is_lex_started(0),
+      is_lex_started(false),
       in_update_value_clause(false),
       will_contextualize(true) {
   reset_query_tables_list(true);
@@ -4146,12 +4128,12 @@ void LEX::restore_backup_query_tables_list(Query_tables_list *backup) {
 */
 
 bool LEX::table_or_sp_used() {
-  DBUG_ENTER("table_or_sp_used");
+  DBUG_TRACE;
 
   if ((sroutines != nullptr && !sroutines->empty()) || query_tables)
-    DBUG_RETURN(true);
+    return true;
 
-  DBUG_RETURN(false);
+  return false;
 }
 
 /**
@@ -4432,6 +4414,10 @@ void SELECT_LEX::update_semijoin_strategies(THD *thd) {
 
   uint opt_switches = thd->variables.optimizer_switch & sj_strategy_mask;
 
+  bool is_secondary_engine_optimization =
+      parent_lex->m_sql_cmd != nullptr &&
+      parent_lex->m_sql_cmd->using_secondary_storage_engine();
+
   List_iterator<TABLE_LIST> sj_list_it(sj_nests);
   TABLE_LIST *sj_nest;
   while ((sj_nest = sj_list_it++)) {
@@ -4444,8 +4430,15 @@ void SELECT_LEX::update_semijoin_strategies(THD *thd) {
     TABLE_LIST *table, *last = nullptr;
     while ((table = table_list++)) last = table;
     table = last;
+    /*
+      Do not respect opt_hints_qb for secondary engine optimization.
+      Secondary storage engines may not support all strategies that are
+      supported by the MySQL executor. Secondary engines should set their
+      supported semi-join strategies in thd->variables.optimizer_switch and not
+      respect optimizer hints or optimizer switches specified by the user.
+    */
     sj_nest->nested_join->sj_enabled_strategies =
-        table->opt_hints_qb
+        (table->opt_hints_qb && !is_secondary_engine_optimization)
             ? table->opt_hints_qb->sj_enabled_strategies(opt_switches)
             : opt_switches;
     if (sj_nest->is_aj_nest()) {
@@ -4693,11 +4686,18 @@ void LEX_MASTER_INFO::initialize() {
   ssl_crl = ssl_crlpath = NULL;
   public_key_path = NULL;
   tls_version = NULL;
+  tls_ciphersuites = UNSPECIFIED;
+  tls_ciphersuites_string = NULL;
   relay_log_name = NULL;
   relay_log_pos = 0;
   repl_ignore_server_ids.clear();
   channel = NULL;
   for_channel = false;
+  compression_algorithm = nullptr;
+  zstd_compression_level = 0;
+  privilege_checks_none = false;
+  privilege_checks_username = privilege_checks_hostname = NULL;
+  require_row_format = -1;
 }
 
 void LEX_MASTER_INFO::set_unspecified() {

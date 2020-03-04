@@ -1040,10 +1040,16 @@ are used to register file deletion operations*/
     }                                                                 \
   } while (0)
 
-#define register_pfs_file_rename_begin(state, locker, key, op, name, src_file, \
-                                       src_line)                               \
-  register_pfs_file_open_begin(state, locker, key, op, name, src_file,         \
-                               static_cast<uint>(src_line))
+#define register_pfs_file_rename_begin(state, locker, key, op, from, to,    \
+                                       src_file, src_line)                  \
+  do {                                                                      \
+    locker = PSI_FILE_CALL(get_thread_file_name_locker)(state, key.m_value, \
+                                                        op, from, &locker); \
+    if (locker != nullptr) {                                                \
+      PSI_FILE_CALL(start_file_rename_wait)                                 \
+      (locker, (size_t)0, from, to, src_file, static_cast<uint>(src_line)); \
+    }                                                                       \
+  } while (0)
 
 #define register_pfs_file_rename_end(locker, from, to, result)       \
   do {                                                               \
@@ -1125,23 +1131,27 @@ The wrapper functions have the prefix of "innodb_". */
   pfs_os_aio_func(type, mode, name, file, buf, offset, n, read_only, message1, \
                   message2, __FILE__, __LINE__)
 
-#define os_file_read_pfs(type, file, buf, offset, n) \
-  pfs_os_file_read_func(type, file, buf, offset, n, __FILE__, __LINE__)
+#define os_file_read_pfs(type, file_name, file, buf, offset, n)          \
+  pfs_os_file_read_func(type, file_name, file, buf, offset, n, __FILE__, \
+                        __LINE__)
 
-#define os_file_read_first_page_pfs(type, file, buf, n) \
-  pfs_os_file_read_first_page_func(type, file, buf, n, __FILE__, __LINE__)
+#define os_file_read_first_page_pfs(type, file_name, file, buf, n)          \
+  pfs_os_file_read_first_page_func(type, file_name, file, buf, n, __FILE__, \
+                                   __LINE__)
 
 #define os_file_copy_pfs(src, src_offset, dest, dest_offset, size)          \
   pfs_os_file_copy_func(src, src_offset, dest, dest_offset, size, __FILE__, \
                         __LINE__)
 
-#define os_file_read_no_error_handling_pfs(type, file, buf, offset, n, o) \
-  pfs_os_file_read_no_error_handling_func(type, file, buf, offset, n, o,  \
-                                          __FILE__, __LINE__)
+#define os_file_read_no_error_handling_pfs(type, file_name, file, buf, offset, \
+                                           n, o)                               \
+  pfs_os_file_read_no_error_handling_func(type, file_name, file, buf, offset,  \
+                                          n, o, __FILE__, __LINE__)
 
-#define os_file_read_no_error_handling_int_fd(type, file, buf, offset, n, o) \
-  pfs_os_file_read_no_error_handling_int_fd_func(type, file, buf, offset, n, \
-                                                 o, __FILE__, __LINE__)
+#define os_file_read_no_error_handling_int_fd(type, file_name, file, buf, \
+                                              offset, n, o)               \
+  pfs_os_file_read_no_error_handling_int_fd_func(                         \
+      type, file_name, file, buf, offset, n, o, __FILE__, __LINE__)
 
 #define os_file_write_pfs(type, name, file, buf, offset, n) \
   pfs_os_file_write_func(type, name, file, buf, offset, n, __FILE__, __LINE__)
@@ -1250,6 +1260,7 @@ this function!
 This is the performance schema instrumented wrapper function for
 os_file_read() which requests a synchronous read operation.
 @param[in, out]	type		IO request context
+@param[in]  file_name file name
 @param[in]	file		Open file handle
 @param[out]	buf		buffer where to read
 @param[in]	offset		file offset where to read
@@ -1258,9 +1269,9 @@ os_file_read() which requests a synchronous read operation.
 @param[in]	src_line	line where the func invoked
 @return DB_SUCCESS if request was successful */
 UNIV_INLINE
-dberr_t pfs_os_file_read_func(IORequest &type, pfs_os_file_t file, void *buf,
-                              os_offset_t offset, ulint n, const char *src_file,
-                              uint src_line);
+dberr_t pfs_os_file_read_func(IORequest &type, const char *file_name,
+                              pfs_os_file_t file, void *buf, os_offset_t offset,
+                              ulint n, const char *src_file, uint src_line);
 
 /** NOTE! Please use the corresponding macro os_file_read_first_page(),
 not directly this function!
@@ -1268,6 +1279,7 @@ This is the performance schema instrumented wrapper function for
 os_file_read_first_page() which requests a synchronous read operation
 of page 0 of IBD file
 @param[in, out]	type		IO request context
+@param[in]  file_name file name
 @param[in]	file		Open file handle
 @param[out]	buf		buffer where to read
 @param[in]	n		number of bytes to read
@@ -1275,8 +1287,8 @@ of page 0 of IBD file
 @param[in]	src_line	line where the func invoked
 @return DB_SUCCESS if request was successful */
 UNIV_INLINE
-dberr_t pfs_os_file_read_first_page_func(IORequest &type, pfs_os_file_t file,
-                                         void *buf, ulint n,
+dberr_t pfs_os_file_read_first_page_func(IORequest &type, const char *file_name,
+                                         pfs_os_file_t file, void *buf, ulint n,
                                          const char *src_file, uint src_line);
 
 /** copy data from one file to another file. Data is read/written
@@ -1300,6 +1312,7 @@ This is the performance schema instrumented wrapper function for
 os_file_read_no_error_handling_func() which requests a synchronous
 read operation.
 @param[in, out]	type		IO request context
+@param[in]  file_name file name
 @param[in]	file		Open file handle
 @param[out]	buf		buffer where to read
 @param[in]	offset		file offset where to read
@@ -1309,11 +1322,9 @@ read operation.
 @param[in]	src_line	line where the func invoked
 @return DB_SUCCESS if request was successful */
 UNIV_INLINE
-dberr_t pfs_os_file_read_no_error_handling_func(IORequest &type,
-                                                pfs_os_file_t file, void *buf,
-                                                os_offset_t offset, ulint n,
-                                                ulint *o, const char *src_file,
-                                                uint src_line);
+dberr_t pfs_os_file_read_no_error_handling_func(
+    IORequest &type, const char *file_name, pfs_os_file_t file, void *buf,
+    os_offset_t offset, ulint n, ulint *o, const char *src_file, uint src_line);
 
 /** NOTE! Please use the corresponding macro
 os_file_read_no_error_handling_int_fd(), not directly this function!
@@ -1321,6 +1332,7 @@ This is the performance schema instrumented wrapper function for
 os_file_read_no_error_handling_int_fd_func() which requests a
 synchronous read operation on files with int type descriptors.
 @param[in, out] type            IO request context
+@param[in]      file_name       file name
 @param[in]      file            Open file handle
 @param[out]     buf             buffer where to read
 @param[in]      offset          file offset where to read
@@ -1332,8 +1344,9 @@ synchronous read operation on files with int type descriptors.
 
 UNIV_INLINE
 dberr_t pfs_os_file_read_no_error_handling_int_fd_func(
-    IORequest &type, int file, void *buf, os_offset_t offset, ulint n, ulint *o,
-    const char *src_file, ulint src_line);
+    IORequest &type, const char *file_name, int file, void *buf,
+    os_offset_t offset, ulint n, ulint *o, const char *src_file,
+    ulint src_line);
 
 /** NOTE! Please use the corresponding macro os_aio(), not directly this
 function!
@@ -1485,20 +1498,22 @@ to original un-instrumented file I/O APIs */
   os_aio_func(type, mode, name, file, buf, offset, n, read_only, message1,  \
               message2)
 
-#define os_file_read_pfs(type, file, buf, offset, n) \
-  os_file_read_func(type, file, buf, offset, n)
+#define os_file_read_pfs(type, file_name, file, buf, offset, n) \
+  os_file_read_func(type, file_name, file, buf, offset, n)
 
-#define os_file_read_first_page_pfs(type, file, buf, n) \
-  os_file_read_first_page_func(type, file, buf, n)
+#define os_file_read_first_page_pfs(type, file_name, file, buf, n) \
+  os_file_read_first_page_func(type, file_name, file, buf, n)
 
 #define os_file_copy_pfs(src, src_offset, dest, dest_offset, size) \
   os_file_copy_func(src, src_offset, dest, dest_offset, size)
 
-#define os_file_read_no_error_handling_pfs(type, file, buf, offset, n, o) \
-  os_file_read_no_error_handling_func(type, file, buf, offset, n, o)
+#define os_file_read_no_error_handling_pfs(type, file_name, file, buf, offset, \
+                                           n, o)                               \
+  os_file_read_no_error_handling_func(type, file_name, file, buf, offset, n, o)
 
-#define os_file_read_no_error_handling_int_fd(type, file, buf, offset, n, o) \
-  os_file_read_no_error_handling_func(type, file, buf, offset, n, o)
+#define os_file_read_no_error_handling_int_fd(type, file_name, file, buf, \
+                                              offset, n, o)               \
+  os_file_read_no_error_handling_func(type, file_name, file, buf, offset, n, o)
 
 #define os_file_write_pfs(type, name, file, buf, offset, n) \
   os_file_write_func(type, name, file, buf, offset, n)
@@ -1525,19 +1540,19 @@ to original un-instrumented file I/O APIs */
 #endif
 
 #ifdef UNIV_PFS_IO
-#define os_file_read(type, file, buf, offset, n) \
-  os_file_read_pfs(type, file, buf, offset, n)
+#define os_file_read(type, file_name, file, buf, offset, n) \
+  os_file_read_pfs(type, file_name, file, buf, offset, n)
 #else
-#define os_file_read(type, file, buf, offset, n) \
-  os_file_read_pfs(type, file.m_file, buf, offset, n)
+#define os_file_read(type, file_name, file, buf, offset, n) \
+  os_file_read_pfs(type, file_name, file.m_file, buf, offset, n)
 #endif
 
 #ifdef UNIV_PFS_IO
-#define os_file_read_first_page(type, file, buf, n) \
-  os_file_read_first_page_pfs(type, file, buf, n)
+#define os_file_read_first_page(type, file_name, file, buf, n) \
+  os_file_read_first_page_pfs(type, file_name, file, buf, n)
 #else
-#define os_file_read_first_page(type, file, buf, n) \
-  os_file_read_first_page_pfs(type, file.m_file, buf, n)
+#define os_file_read_first_page(type, file_name, file, buf, n) \
+  os_file_read_first_page_pfs(type, file_name, file.m_file, buf, n)
 #endif
 
 #ifdef UNIV_PFS_IO
@@ -1563,11 +1578,14 @@ to original un-instrumented file I/O APIs */
 #endif
 
 #ifdef UNIV_PFS_IO
-#define os_file_read_no_error_handling(type, file, buf, offset, n, o) \
-  os_file_read_no_error_handling_pfs(type, file, buf, offset, n, o)
+#define os_file_read_no_error_handling(type, file_name, file, buf, offset, n, \
+                                       o)                                     \
+  os_file_read_no_error_handling_pfs(type, file_name, file, buf, offset, n, o)
 #else
-#define os_file_read_no_error_handling(type, file, buf, offset, n, o) \
-  os_file_read_no_error_handling_pfs(type, file.m_file, buf, offset, n, o)
+#define os_file_read_no_error_handling(type, file_name, file, buf, offset, n, \
+                                       o)                                     \
+  os_file_read_no_error_handling_pfs(type, file_name, file.m_file, buf,       \
+                                     offset, n, o)
 #endif
 
 #ifdef UNIV_HOTBACKUP
@@ -1644,25 +1662,27 @@ ulint os_file_get_last_error(bool report_all_errors);
 function!
 Requests a synchronous read operation.
 @param[in]	type		IO request context
+@param[in]  file_name file name
 @param[in]	file		Open file handle
 @param[out]	buf		buffer where to read
 @param[in]	offset		file offset where to read
 @param[in]	n		number of bytes to read
 @return DB_SUCCESS if request was successful */
-dberr_t os_file_read_func(IORequest &type, os_file_t file, void *buf,
-                          os_offset_t offset, ulint n)
-    MY_ATTRIBUTE((warn_unused_result));
+dberr_t os_file_read_func(IORequest &type, const char *file_name,
+                          os_file_t file, void *buf, os_offset_t offset,
+                          ulint n) MY_ATTRIBUTE((warn_unused_result));
 
 /** NOTE! Use the corresponding macro os_file_read_first_page(),
 not directly this function!
 Requests a synchronous read operation of page 0 of IBD file
 @param[in]	type		IO request context
+@param[in]  file_name file name
 @param[in]	file		Open file handle
 @param[out]	buf		buffer where to read
 @param[in]	n		number of bytes to read
 @return DB_SUCCESS if request was successful */
-dberr_t os_file_read_first_page_func(IORequest &type, os_file_t file, void *buf,
-                                     ulint n)
+dberr_t os_file_read_first_page_func(IORequest &type, const char *file_name,
+                                     os_file_t file, void *buf, ulint n)
     MY_ATTRIBUTE((warn_unused_result));
 
 /** copy data from one file to another file. Data is read/written
@@ -1690,16 +1710,16 @@ not directly this function!
 Requests a synchronous positioned read operation. This function does not do
 any error handling. In case of error it returns FALSE.
 @param[in]	type		IO request context
+@param[in]  file_name file name
 @param[in]	file		Open file handle
 @param[out]	buf		buffer where to read
 @param[in]	offset		file offset where to read
 @param[in]	n		number of bytes to read
 @param[out]	o		number of bytes actually read
 @return DB_SUCCESS or error code */
-dberr_t os_file_read_no_error_handling_func(IORequest &type, os_file_t file,
-                                            void *buf, os_offset_t offset,
-                                            ulint n, ulint *o)
-    MY_ATTRIBUTE((warn_unused_result));
+dberr_t os_file_read_no_error_handling_func(
+    IORequest &type, const char *file_name, os_file_t file, void *buf,
+    os_offset_t offset, ulint n, ulint *o) MY_ATTRIBUTE((warn_unused_result));
 
 /** NOTE! Use the corresponding macro os_file_write(), not directly this
 function!
@@ -1945,7 +1965,7 @@ byte *os_file_compress_page(Compression compression, ulint block_size,
 @retval	false	if O_DIRECT is not supported. */
 bool os_is_o_direct_supported() MY_ATTRIBUTE((warn_unused_result));
 
-/** Class to scan the directory heirarch using a depth first scan. */
+/** Class to scan the directory heirarchy using a depth first scan. */
 class Dir_Walker {
  public:
   using Path = std::string;
@@ -1956,9 +1976,9 @@ class Dir_Walker {
   static bool is_directory(const Path &path);
 
   /** Depth first traversal of the directory starting from basedir
-  @param[in]	basedir		Start scanning from this directory
-  @param[in]    recursive       True if scan should be recursive
-  @param[in]	f		Function to call for each entry */
+  @param[in]  basedir    Start scanning from this directory
+  @param[in]  recursive  `true` if scan should be recursive
+  @param[in]  f          Function to call for each entry */
   template <typename F>
   static void walk(const Path &basedir, bool recursive, F &&f) {
 #ifdef _WIN32
@@ -1989,9 +2009,9 @@ class Dir_Walker {
   using Function = std::function<void(const Path &, size_t)>;
 
   /** Depth first traversal of the directory starting from basedir
-  @param[in]	basedir		Start scanning from this directory
-  @param[in]    recursive       True if scan should be recursive
-  @param[in]	f		Function to call for each entry */
+  @param[in]      basedir    Start scanning from this directory
+  @param[in]      recursive  `true` if scan should be recursive
+  @param[in]      f          Callback for each entry found */
 #ifdef _WIN32
   static void walk_win32(const Path &basedir, bool recursive, Function &&f);
 #else

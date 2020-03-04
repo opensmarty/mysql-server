@@ -207,7 +207,7 @@ TEST_F(Keys_container_test, StoreFetchRemove) {
   size_t key_data_fetched_size = fetched_key->get_key_data_size();
   EXPECT_STREQ(sample_key_data.c_str(),
                reinterpret_cast<const char *>(key_data_fetched));
-  EXPECT_STREQ("AES", fetched_key->get_key_type()->c_str());
+  EXPECT_STREQ("AES", fetched_key->get_key_type_as_string()->c_str());
   ASSERT_TRUE(sample_key_data.length() + 1 == key_data_fetched_size);
 
   keys_container->remove_key(&key_id);
@@ -676,8 +676,8 @@ TEST_F(Keys_container_test_dont_close,
   keys_container = new Keys_container(logger);
 
   // this key will not be in backup file thus we do not care about it
-  Key *sample_key3 = new Key("Roberts_key3", "ZZZZ", "MaybeRobert",
-                             (void *)("DATA"), strlen("DATA"));
+  Key *sample_key3 =
+      new Key("Roberts_key3", "ZZZZ", "MaybeRobert", "DATA", strlen("DATA"));
 
   EXPECT_EQ(keys_container->init(keyring_io_dont_remove_backup, file_name), 0);
   EXPECT_EQ(keys_container->store_key(sample_key3), 0);
